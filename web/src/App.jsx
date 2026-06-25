@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import SearchAndProfile from './pages/SearchAndProfile';
+import SidebarLayout from './components/SidebarLayout';
 
 // Mock Auth context for now
 const isAuthenticated = () => !!localStorage.getItem('token');
@@ -21,12 +22,16 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/dashboard" element={
           <ProtectedRoute>
-            <Dashboard />
+            <SidebarLayout activeTab="dashboard">
+              <Dashboard />
+            </SidebarLayout>
           </ProtectedRoute>
         } />
         <Route path="/search" element={
           <ProtectedRoute>
-            <SearchAndProfile />
+            <SidebarLayout activeTab="search">
+              <SearchAndProfile />
+            </SidebarLayout>
           </ProtectedRoute>
         } />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

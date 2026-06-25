@@ -1,9 +1,31 @@
 const db = require('../config/db');
 
+const getOrCreateActiveCycle = async (ctrb_id) => {
+    // Check if there is an active cycle for this CTRB (completed_at is null)
+    let cycleQuery = await db.query(
+        "SELECT id FROM inspection_cycles WHERE ctrb_id = $1 AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        [ctrb_id]
+    );
+    if (cycleQuery.rows.length > 0) {
+        return cycleQuery.rows[0].id;
+    }
+    // Otherwise, create one
+    const insertQuery = `
+        INSERT INTO inspection_cycles (ctrb_id, status) 
+        VALUES ($1, 'under_inspection') RETURNING id
+    `;
+    const newCycle = await db.query(insertQuery, [ctrb_id]);
+    return newCycle.rows[0].id;
+};
+
 const addReplacement = async (req, res) => {
     try {
-        const { ctrb_id, cycle_id, component, original_inspection_id, rejection_cause, replacement_part_number } = req.body;
+        let { ctrb_id, cycle_id, component, original_inspection_id, rejection_cause, replacement_part_number } = req.body;
         const replaced_by = req.user.sub;
+
+        if (!cycle_id || typeof cycle_id !== 'string' || cycle_id.startsWith('OFFLINE') || !cycle_id.match(/^[0-9a-fA-F-]{36}$/)) {
+            cycle_id = await getOrCreateActiveCycle(ctrb_id);
+        }
 
         const insertQuery = `
             INSERT INTO component_replacements 
@@ -47,6 +69,15 @@ const addAssembly = async (req, res) => {
             ctrb_id, grease_type || 'AAR M-942', grease_qty_g, lateral_play_mm, lateral_device,
             assembled_by, qc_inspector_id, remarks, final_status
         ]);
+
+        // Update CTRB record status
+        await db.query('UPDATE ctrb_records SET status = $1, updated_at = NOW() WHERE id = $2', [final_status, ctrb_id]);
+
+        // Complete the active inspection cycle
+        await db.query(
+            "UPDATE inspection_cycles SET status = $1, completed_at = NOW() WHERE ctrb_id = $2 AND completed_at IS NULL",
+            [final_status, ctrb_id]
+        );
 
         res.status(201).json({ data: r.rows[0] });
     } catch (err) {

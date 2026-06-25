@@ -1,10 +1,21 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
-const API_BASE_URL = 'http://localhost:5000/api/v1'; // Should be driven by environment variables on deployment
+// Extract the development machine's local IP address to support real device API debugging
+const getBaseUrl = () => {
+    if (process.env.EXPO_PUBLIC_API_BASE_URL) {
+        console.log(`Using environment API endpoint: ${process.env.EXPO_PUBLIC_API_BASE_URL}`);
+        return process.env.EXPO_PUBLIC_API_BASE_URL;
+    }
+    const hostUri = Constants.expoConfig?.hostUri;
+    const hostIp = hostUri ? hostUri.split(':')[0] : '192.168.1.37';
+    console.log(`Resolved local API endpoint: http://${hostIp}:5000/api/v1`);
+    return `http://${hostIp}:5000/api/v1`;
+};
 
 const apiClient = axios.create({
-    baseURL: API_BASE_URL,
+    baseURL: getBaseUrl(),
     timeout: 10000,
 });
 

@@ -14,10 +14,32 @@ const validateDimensional = async (component, param_key, measured_value) => {
     return { result: accepted ? 'accepted' : 'rejected', min_val, max_val };
 };
 
+const getOrCreateActiveCycle = async (ctrb_id) => {
+    // Check if there is an active cycle for this CTRB (completed_at is null)
+    let cycleQuery = await db.query(
+        "SELECT id FROM inspection_cycles WHERE ctrb_id = $1 AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1",
+        [ctrb_id]
+    );
+    if (cycleQuery.rows.length > 0) {
+        return cycleQuery.rows[0].id;
+    }
+    // Otherwise, create one
+    const insertQuery = `
+        INSERT INTO inspection_cycles (ctrb_id, status) 
+        VALUES ($1, 'under_inspection') RETURNING id
+    `;
+    const newCycle = await db.query(insertQuery, [ctrb_id]);
+    return newCycle.rows[0].id;
+};
+
 const addDimensionalInspection = async (req, res) => {
     try {
-        const { ctrb_id, cycle_id, component, measurements } = req.body;
+        let { ctrb_id, cycle_id, component, measurements } = req.body;
         const operator_id = req.user.sub;
+
+        if (!cycle_id || typeof cycle_id !== 'string' || cycle_id.startsWith('OFFLINE') || !cycle_id.match(/^[0-9a-fA-F-]{36}$/)) {
+            cycle_id = await getOrCreateActiveCycle(ctrb_id);
+        }
 
         const results = [];
         let allAccepted = true;
@@ -47,8 +69,12 @@ const addDimensionalInspection = async (req, res) => {
 
 const addVisualInspection = async (req, res) => {
     try {
-        const { ctrb_id, cycle_id, component, is_present, defects, remarks, photo_keys } = req.body;
+        let { ctrb_id, cycle_id, component, is_present, defects, remarks, photo_keys } = req.body;
         const operator_id = req.user.sub;
+
+        if (!cycle_id || typeof cycle_id !== 'string' || cycle_id.startsWith('OFFLINE') || !cycle_id.match(/^[0-9a-fA-F-]{36}$/)) {
+            cycle_id = await getOrCreateActiveCycle(ctrb_id);
+        }
 
         const AUTO_REJECT_DEFECTS = ['Electric Burn', 'Fatigue Spalling', 'Peeling', 'Fluting', 'Cage Broken'];
         let overall_result = 'accepted';
