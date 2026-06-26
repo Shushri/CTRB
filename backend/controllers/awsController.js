@@ -34,7 +34,7 @@ const getPresignedUrl = async (req, res) => {
 
 const getPhotoUrl = async (req, res) => {
     try {
-        const { key } = req.params;
+        const key = req.query.key || req.params.key || req.params[0];
         const params = {
             Bucket: process.env.AWS_BUCKET_NAME || 'ctrb-bucket',
             Key: key,

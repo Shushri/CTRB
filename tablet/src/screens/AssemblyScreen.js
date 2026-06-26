@@ -36,18 +36,78 @@ export default function AssemblyScreen({ route, navigation }) {
                 }
 
                 // Fetch CTRBs (received, under inspection, assembly)
-                const records = await database.collections.get('ctrb_records').query().fetch();
-                // Filter records to only show received, under_inspection, assembly
-                const filtered = records.filter(r => ['received', 'under_inspection', 'assembly'].includes(r.status));
-                setCtrbRecords(filtered);
+                let records = await database.collections.get('ctrb_records').query().fetch();
                 
+                // Fetch recent records from the backend first to sync with local DB
+                try {
+                    const apiRes = await apiClient.get('/ctrb/recent?limit=50');
+                    const backendRecords = apiRes.data?.data || [];
+                    if (backendRecords.length > 0) {
+                        await database.write(async () => {
+                            const ctrbCollection = database.collections.get('ctrb_records');
+                            for (const backendRecord of backendRecords) {
+                                // Check if we already have it locally
+                                const matched = records.find(r => r.id === backendRecord.id);
+                                if (!matched) {
+                                    await ctrbCollection.create(record => {
+                                        record.id = backendRecord.id;
+                                        record.ctrb_number = backendRecord.ctrb_number;
+                                        record.job_id = backendRecord.job_id;
+                                        record.make = backendRecord.make;
+                                        record.date_received = backendRecord.date_received;
+                                        record.status = backendRecord.status;
+                                    });
+                                } else if (matched.status !== backendRecord.status) {
+                                    // Update status to sync
+                                    await matched.update(record => {
+                                        record.status = backendRecord.status;
+                                    });
+                                }
+                            }
+                        });
+                        // Re-fetch local records after sync
+                        records = await database.collections.get('ctrb_records').query().fetch();
+                    }
+                } catch (apiErr) {
+                    console.log('Failed to sync recent CTRBs from backend in AssemblyScreen:', apiErr.message);
+                }
+
                 // Read auto-selection parameter from dashboard
                 const autoSelectId = route.params?.autoSelectId;
-                if (autoSelectId && filtered.some(r => r.id === autoSelectId)) {
+                if (autoSelectId) {
+                    const existsLocally = records.some(r => r.id === autoSelectId);
+                    if (!existsLocally) {
+                        try {
+                            const apiRes = await apiClient.get(`/ctrb/${autoSelectId}`);
+                            const backendRecord = apiRes.data?.data;
+                            if (backendRecord) {
+                                await database.write(async () => {
+                                    await database.collections.get('ctrb_records').create(record => {
+                                        record.id = backendRecord.id;
+                                        record.ctrb_number = backendRecord.ctrb_number;
+                                        record.job_id = backendRecord.job_id;
+                                        record.make = backendRecord.make;
+                                        record.date_received = backendRecord.date_received;
+                                        record.status = backendRecord.status;
+                                    });
+                                });
+                                // Re-fetch local records
+                                records = await database.collections.get('ctrb_records').query().fetch();
+                            }
+                        } catch (apiErr) {
+                            console.log('Failed to fetch CTRB record from backend for assembly local upsert:', apiErr.message);
+                        }
+                    }
                     setSelectedCtrbId(autoSelectId);
-                } else if (filtered.length > 0) {
-                    setSelectedCtrbId(filtered[0].id);
+                } else {
+                    const filtered = records.filter(r => ['received', 'under_inspection', 'assembly'].includes(r.status));
+                    if (filtered.length > 0) {
+                        setSelectedCtrbId(filtered[0].id);
+                    }
                 }
+                
+                const filtered = records.filter(r => ['received', 'under_inspection', 'assembly'].includes(r.status));
+                setCtrbRecords(filtered);
             } catch (err) {
                 console.error('Failed to load local CTRB records', err);
             }
@@ -224,7 +284,7 @@ export default function AssemblyScreen({ route, navigation }) {
                 grease_qty_g: gQty,
                 lateral_play_mm: lPlay,
                 lateral_device: lateralDevice,
-                qc_inspector_id: qcInspectorId || 'mock-qc-id',
+                qc_inspector_id: operatorId || 'mock-qc-id',
                 remarks: remarks,
                 final_status: finalStatus
             };
@@ -310,16 +370,16 @@ export default function AssemblyScreen({ route, navigation }) {
                         return (
                             <View key={index} style={styles.checkRow}>
                                 <MaterialCommunityIcons 
-                                    name={status ? "check-circle" : "close-circle"} 
+                                    name={status ? "check-circle" : "alert-circle"} 
                                     size={18} 
-                                    color={status ? "#10b981" : "#ef4444"} 
+                                    color={status ? "#10B981" : "#FCD34D"} 
                                 />
                                 <Text style={[styles.checkLabel, { color: status ? '#334155' : '#94a3b8' }]}>
                                     {item.label}
                                 </Text>
-                                <View style={[styles.checkBadge, { backgroundColor: status ? '#d1fae5' : '#fee2e2' }]}>
-                                    <Text style={[styles.checkBadgeText, { color: status ? '#065f46' : '#991b1b' }]}>
-                                        {status ? "OK" : "MISSING"}
+                                <View style={[styles.checkBadge, { backgroundColor: status ? '#d1fae5' : '#fef3c7' }]}>
+                                    <Text style={[styles.checkBadgeText, { color: status ? '#065f46' : '#b45309' }]}>
+                                        {status ? "OK" : "PENDING"}
                                     </Text>
                                 </View>
                             </View>

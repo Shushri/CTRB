@@ -78,6 +78,9 @@ export default function NewCTRBScreen({ navigation }) {
             // Save to local WatermelonDB database
             await database.write(async () => {
                 await database.collections.get('ctrb_records').create(record => {
+                    if (savedRecord?.id) {
+                        record.id = savedRecord.id;
+                    }
                     record.ctrb_number = payload.ctrb_number;
                     record.job_id = savedRecord?.job_id || `JOB-OFFLINE-${Date.now()}`;
                     record.make = payload.make;

@@ -1,13 +1,14 @@
 {
   "expo": {
     "name": "tablet",
-    "slug": "tablet",
+    "slug": "ctrb-traceability",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.tablet"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,6 +21,12 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "dda86ea7-5225-44e6-9ee0-2aabe4d08466"
+      }
+    },
+    "owner": "supply-aid"
   }
 }

@@ -7,6 +7,7 @@ const router = express.Router();
 router.use(authenticateToken);
 
 router.post('/presign', getPresignedUrl);
-router.get('/:key', getPhotoUrl);
+router.get('/', getPhotoUrl);
+router.get('/*', getPhotoUrl);
 
 module.exports = router;

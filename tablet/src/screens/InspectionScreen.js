@@ -5,6 +5,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { database } from '../database';
 import CameraComponent from '../components/CameraComponent';
+import apiClient from '../api/apiClient';
 
 export default function InspectionScreen({ route, navigation }) {
     const insets = useSafeAreaInsets();
@@ -31,7 +32,7 @@ export default function InspectionScreen({ route, navigation }) {
     const [replacementsByComponent, setReplacementsByComponent] = useState({}); // { cone: { sn: 'SN123', cause: 'reason' }, ... }
 
     // Helpers to get component-specific values
-    const getVisualResultForComp = (comp) => visualResults[comp] || 'accepted';
+    const getVisualResultForComp = (comp) => visualResults[comp] !== undefined ? visualResults[comp] : null;
     const getDefectsForComp = (comp) => defectsByComponent[comp] || [];
     const getRemarksForComp = (comp) => remarksByComponent[comp] || '';
     const getReplacementSnForComp = (comp) => replacementsByComponent[comp]?.sn || '';
@@ -41,7 +42,11 @@ export default function InspectionScreen({ route, navigation }) {
     const saveVisualField = async (comp, currentVisResults, currentDefects, currentRemarks, currentReps) => {
         if (!selectedCtrbId) return;
 
-        const visResult = currentVisResults[comp] || 'accepted';
+        const visResult = currentVisResults[comp];
+        if (visResult === undefined || visResult === null) {
+            console.log(`Skipping auto-save visual field for ${comp} since decision is not set yet.`);
+            return;
+        }
         const defects = currentDefects[comp] || [];
         const rems = currentRemarks[comp] || '';
         
@@ -295,16 +300,75 @@ export default function InspectionScreen({ route, navigation }) {
                 }
 
                 // Fetch local received CTRBs
-                const records = await database.collections.get('ctrb_records').query().fetch();
-                setCtrbRecords(records);
+                let records = await database.collections.get('ctrb_records').query().fetch();
                 
+                // Fetch recent records from the backend first to sync with local DB
+                try {
+                    const apiRes = await apiClient.get('/ctrb/recent?limit=50');
+                    const backendRecords = apiRes.data?.data || [];
+                    if (backendRecords.length > 0) {
+                        await database.write(async () => {
+                            const ctrbCollection = database.collections.get('ctrb_records');
+                            for (const backendRecord of backendRecords) {
+                                // Check if we already have it locally
+                                const matched = records.find(r => r.id === backendRecord.id);
+                                if (!matched) {
+                                    await ctrbCollection.create(record => {
+                                        record.id = backendRecord.id;
+                                        record.ctrb_number = backendRecord.ctrb_number;
+                                        record.job_id = backendRecord.job_id;
+                                        record.make = backendRecord.make;
+                                        record.date_received = backendRecord.date_received;
+                                        record.status = backendRecord.status;
+                                    });
+                                } else if (matched.status !== backendRecord.status) {
+                                    // Update status to sync
+                                    await matched.update(record => {
+                                        record.status = backendRecord.status;
+                                    });
+                                }
+                            }
+                        });
+                        // Re-fetch local records after sync
+                        records = await database.collections.get('ctrb_records').query().fetch();
+                    }
+                } catch (apiErr) {
+                    console.log('Failed to sync recent CTRBs from backend in InspectionScreen:', apiErr.message);
+                }
+
                 // Read auto-selection parameter from dashboard
                 const autoSelectId = route.params?.autoSelectId;
-                if (autoSelectId && records.some(r => r.id === autoSelectId)) {
+                if (autoSelectId) {
+                    const existsLocally = records.some(r => r.id === autoSelectId);
+                    if (!existsLocally) {
+                        try {
+                            const apiRes = await apiClient.get(`/ctrb/${autoSelectId}`);
+                            const backendRecord = apiRes.data?.data;
+                            if (backendRecord) {
+                                await database.write(async () => {
+                                    await database.collections.get('ctrb_records').create(record => {
+                                        record.id = backendRecord.id;
+                                        record.ctrb_number = backendRecord.ctrb_number;
+                                        record.job_id = backendRecord.job_id;
+                                        record.make = backendRecord.make;
+                                        record.date_received = backendRecord.date_received;
+                                        record.status = backendRecord.status;
+                                    });
+                                });
+                                // Re-fetch local records
+                                records = await database.collections.get('ctrb_records').query().fetch();
+                            }
+                        } catch (apiErr) {
+                            console.log('Failed to fetch CTRB record from backend for local upsert:', apiErr.message);
+                        }
+                    }
                     setSelectedCtrbId(autoSelectId);
                 } else {
                     setSelectedCtrbId('');
                 }
+                
+                const filtered = records.filter(r => ['received', 'under_inspection', 'assembly'].includes(r.status));
+                setCtrbRecords(filtered);
             } catch (err) {
                 console.error('Failed to load data', err);
             }
@@ -425,6 +489,26 @@ export default function InspectionScreen({ route, navigation }) {
     const replacementSn = getReplacementSnForComp(component);
     const replacementCause = getReplacementCauseForComp(component);
 
+    // Compute isFormReady for G-81 save block (Fix 2)
+    const isFormReady = (() => {
+        if (!selectedCtrbId) return false;
+        if (type === 'visual') {
+            if (visualResult !== 'accepted' && visualResult !== 'rejected') return false;
+            if (visualResult === 'rejected') {
+                const hasDefectsOrRemarks = selectedDefects.length > 0 || (remarks && remarks.trim() !== '');
+                if (!hasDefectsOrRemarks) return false;
+                const hasReplacementSn = replacementSn && replacementSn.trim() !== '';
+                if (!hasReplacementSn) return false;
+            }
+            return true;
+        } else if (type === 'dimensional') {
+            if (!measuredValue || !measuredValue.trim()) return false;
+            const val = parseFloat(measuredValue);
+            return !isNaN(val);
+        }
+        return false;
+    })();
+
     const setVisualResult = (val) => setVisualResultForComp(component, val);
     const setRemarks = (val) => setRemarksForComp(component, val);
     const setReplacementSn = (val) => setReplacementSnForComp(component, val);
@@ -464,9 +548,58 @@ export default function InspectionScreen({ route, navigation }) {
         return false;
     };
 
+    const isFormComplete = () => {
+        if (!selectedCtrbId) return false;
+        
+        if (type === 'visual') {
+            const result = visualResults[component];
+            if (!result) return false;
+            if (isComponentFailed(component)) {
+                const repSn = replacementsByComponent[component]?.sn;
+                if (!repSn || !repSn.trim()) return false;
+            }
+            return true;
+        } else if (type === 'dimensional') {
+            if (!measuredValue || !measuredValue.trim()) return false;
+            const val = parseFloat(measuredValue);
+            if (isNaN(val)) return false;
+            if (isComponentFailed(component)) {
+                const repSn = replacementsByComponent[component]?.sn;
+                if (!repSn || !repSn.trim()) return false;
+            }
+            return true;
+        }
+        return false;
+    };
+
     const handleSave = async () => {
         if (!selectedCtrbId) {
             Alert.alert('Error', 'Please select a CTRB record.');
+            return;
+        }
+
+        if (!isFormComplete()) {
+            let errorMsg = '';
+            if (type === 'visual') {
+                const result = visualResults[component];
+                if (!result) {
+                    errorMsg = `Visual inspection decision for ${component.toUpperCase()} is required. Please select ACCEPTABLE or REJECT / REWORK.`;
+                } else if (result === 'rejected' || isComponentFailed(component)) {
+                    errorMsg = `Component ${component.toUpperCase()} has failed G-81 checks. You must record a Replacement Component Serial Number to establish G-81 traceability linking.`;
+                }
+            } else if (type === 'dimensional') {
+                if (!measuredValue || !measuredValue.trim()) {
+                    errorMsg = `A measured value is required for ${specs[paramKey]?.label || paramKey}.`;
+                } else {
+                    const val = parseFloat(measuredValue);
+                    if (isNaN(val)) {
+                        errorMsg = `A valid numeric value is required for ${specs[paramKey]?.label || paramKey}.`;
+                    } else if (isComponentFailed(component)) {
+                        errorMsg = `Component ${component.toUpperCase()} has failed G-81 checks. You must record a Replacement Component Serial Number to establish G-81 traceability linking.`;
+                    }
+                }
+            }
+            Alert.alert('Incomplete Form', errorMsg || 'Please complete all required fields before saving.');
             return;
         }
 
@@ -478,6 +611,54 @@ export default function InspectionScreen({ route, navigation }) {
                 await saveDimensionalField(paramKey, measuredValue);
             } else if (type === 'visual') {
                 await saveVisualField(component, visualResults, defectsByComponent, remarksByComponent, replacementsByComponent);
+            }
+
+            // Attempt backend API post immediately (Fix 3a)
+            try {
+                if (type === 'dimensional') {
+                    await apiClient.post('/inspections/dimensional', {
+                        ctrb_id: selectedCtrbId,
+                        cycle_id: 'OFFLINE-CYCLE',
+                        component: component,
+                        measurements: [
+                            {
+                                param_key: paramKey,
+                                measured_value: parseFloat(measuredValue)
+                            }
+                        ]
+                    });
+                } else if (type === 'visual') {
+                    await apiClient.post('/inspections/visual', {
+                        ctrb_id: selectedCtrbId,
+                        cycle_id: 'OFFLINE-CYCLE',
+                        component: component,
+                        is_present: true,
+                        defects: selectedDefects,
+                        remarks: remarks || ''
+                    });
+                }
+                console.log('Successfully posted G-81 inspection to backend');
+            } catch (apiErr) {
+                console.log('Failed to post G-81 inspection to backend (offline mode fallback):', apiErr.message);
+            }
+
+            if (isComponentFailed(component) && replacementSn && replacementSn.trim() !== '') {
+                try {
+                    const cause = type === 'visual'
+                        ? `Visual defects: ${selectedDefects.join(', ') || remarks}`
+                        : `Dimensional check failed: ${paramKey} = ${measuredValue} (Spec: ${currentSpec?.min}-${currentSpec?.max})`;
+                    
+                    await apiClient.post('/assembly/replacements', {
+                        ctrb_id: selectedCtrbId,
+                        component: component,
+                        rejection_cause: cause,
+                        replacement_part_number: replacementSn.trim(),
+                        notes: replacementCause?.trim() || ''
+                    });
+                    console.log('Successfully posted replacement link to backend');
+                } catch (repErr) {
+                    console.log('Failed to post replacement link to backend:', repErr.message);
+                }
             }
 
             // Fetch all inspections for this CTRB to run compliance checks
@@ -613,14 +794,10 @@ export default function InspectionScreen({ route, navigation }) {
                 <Text style={styles.gaugeCurrentText}>
                     Measured Value: <Text style={[styles.bold, { color }]}>{val} {unit}</Text>
                 </Text>
-                
-                {/* Gauge bar with green and red zones */}
                 <View style={{ height: 16, borderRadius: 8, flexDirection: 'row', overflow: 'hidden', backgroundColor: '#e2e8f0', position: 'relative', marginVertical: 12 }}>
-                    <View style={{ flex: 2, backgroundColor: '#fecaca' }} /> {/* Under red zone */}
-                    <View style={{ flex: 6, backgroundColor: '#d1fae5' }} /> {/* Green valid zone */}
-                    <View style={{ flex: 2, backgroundColor: '#fecaca' }} /> {/* Over red zone */}
-                    
-                    {/* Cursor */}
+                    <View style={{ flex: 2, backgroundColor: '#fecaca' }} />
+                    <View style={{ flex: 6, backgroundColor: '#d1fae5' }} />
+                    <View style={{ flex: 2, backgroundColor: '#fecaca' }} />
                     <View style={{
                         position: 'absolute',
                         top: -2,
@@ -634,8 +811,6 @@ export default function InspectionScreen({ route, navigation }) {
                         transform: [{ translateX: -3 }]
                     }} />
                 </View>
-
-                {/* Limit ticks and markers */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 }}>
                     <View style={{ alignItems: 'flex-start' }}>
                         <View style={{ height: 6, width: 2, backgroundColor: '#94a3b8', alignSelf: 'center' }} />
@@ -699,7 +874,6 @@ export default function InspectionScreen({ route, navigation }) {
                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
                 style={styles.container}
             >
-                {/* Top Bar Header */}
                 <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
                     <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
                         <MaterialCommunityIcons name="arrow-left" size={24} color="#002045" />
@@ -712,7 +886,6 @@ export default function InspectionScreen({ route, navigation }) {
                 <View style={styles.card}>
                     <View style={styles.accentBorder} />
 
-                    {/* Selected CTRB Metadata Banner */}
                     {selectedCtrbId ? (
                         <View style={styles.metaBanner}>
                             <View style={styles.metaMain}>
@@ -732,7 +905,6 @@ export default function InspectionScreen({ route, navigation }) {
                         </View>
                     )}
 
-                    {/* CTRB Selection Block */}
                     {!route.params?.autoSelectId ? (
                         <View style={styles.formGroup}>
                             <Text style={styles.sectionHeading}>SELECT CTRB UNIT IN QUEUE</Text>
@@ -765,7 +937,6 @@ export default function InspectionScreen({ route, navigation }) {
                     {selectedCtrbId ? (
                         <>
 
-                    {/* Component selection slider */}
                     <View style={styles.formGroup}>
                         <Text style={styles.sectionHeading}>SELECT TARGET COMPONENT</Text>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.compSelectorRow}>
@@ -788,7 +959,6 @@ export default function InspectionScreen({ route, navigation }) {
                         </ScrollView>
                     </View>
 
-                    {/* Mode Tabs: Visual vs Dimensional */}
                     <View style={styles.tabContainer}>
                         <TouchableOpacity
                             style={[styles.tabButton, type === 'visual' && styles.tabButtonActive]}
@@ -806,31 +976,48 @@ export default function InspectionScreen({ route, navigation }) {
                         </TouchableOpacity>
                     </View>
 
-                    {/* Visual Inspection Section */}
                     {type === 'visual' ? (
                         <View>
-                            {/* Pass/Fail Selector */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>VISUAL INSPECTION DECISION</Text>
                                 <View style={styles.decisionRow}>
                                     <TouchableOpacity
-                                        style={[styles.decisionBtn, visualResult === 'accepted' && styles.decisionBtnAccept]}
+                                        style={[
+                                            styles.decisionBtn,
+                                            visualResult === 'accepted' && styles.decisionBtnAccept
+                                        ]}
                                         onPress={() => setVisualResult('accepted')}
                                     >
-                                        <MaterialCommunityIcons name="check" size={20} color={visualResult === 'accepted' ? 'white' : '#10b981'} />
-                                        <Text style={[styles.decisionText, visualResult === 'accepted' && styles.decisionTextActive]}>ACCEPTABLE</Text>
+                                        <MaterialCommunityIcons 
+                                            name="check" 
+                                            size={20} 
+                                            color={visualResult === 'accepted' ? '#065F46' : '#64748B'} 
+                                        />
+                                        <Text style={[
+                                            styles.decisionText, 
+                                            visualResult === 'accepted' && styles.decisionTextAccept
+                                        ]}>ACCEPTABLE</Text>
                                     </TouchableOpacity>
                                     <TouchableOpacity
-                                        style={[styles.decisionBtn, visualResult === 'rejected' && styles.decisionBtnReject]}
+                                        style={[
+                                            styles.decisionBtn,
+                                            visualResult === 'rejected' && styles.decisionBtnReject
+                                        ]}
                                         onPress={() => setVisualResult('rejected')}
                                     >
-                                        <MaterialCommunityIcons name="close" size={20} color={visualResult === 'rejected' ? 'white' : '#ef4444'} />
-                                        <Text style={[styles.decisionText, visualResult === 'rejected' && styles.decisionTextActive]}>REJECT / REWORK</Text>
+                                        <MaterialCommunityIcons 
+                                            name="close" 
+                                            size={20} 
+                                            color={visualResult === 'rejected' ? '#991B1B' : '#64748B'} 
+                                        />
+                                        <Text style={[
+                                            styles.decisionText, 
+                                            visualResult === 'rejected' && styles.decisionTextReject
+                                        ]}>REJECT / REWORK</Text>
                                     </TouchableOpacity>
                                 </View>
                             </View>
 
-                            {/* Defect Cards Grid */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>SELECT REGISTERED DEFECTS</Text>
                                 <View style={styles.defectGrid}>
@@ -856,7 +1043,6 @@ export default function InspectionScreen({ route, navigation }) {
                                 </View>
                             </View>
 
-                            {/* Photo Gallery & Camera */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>DOCUMENTED PHOTOS OF COMPONENT</Text>
                                 <ScrollView horizontal contentContainerStyle={styles.photoContainer} showsHorizontalScrollIndicator={false}>
@@ -875,7 +1061,6 @@ export default function InspectionScreen({ route, navigation }) {
                                 </ScrollView>
                             </View>
 
-                            {/* Remarks */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>DEFECT REMARKS</Text>
                                 <TextInput
@@ -890,9 +1075,7 @@ export default function InspectionScreen({ route, navigation }) {
                             </View>
                         </View>
                     ) : (
-                        // Dimensional Section
                         <View>
-                            {/* Parameter Selection Grid */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>SELECT MEASUREMENT PARAMETER</Text>
                                 <View style={styles.paramGrid}>
@@ -912,7 +1095,7 @@ export default function InspectionScreen({ route, navigation }) {
                                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                                     <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dotColor }} />
                                                     <Text style={[styles.paramButtonText, isSelected && styles.paramButtonTextActive]}>
-                                                        {spec.label}
+                                                         {spec.label}
                                                     </Text>
                                                 </View>
                                             </TouchableOpacity>
@@ -921,7 +1104,6 @@ export default function InspectionScreen({ route, navigation }) {
                                 </View>
                             </View>
 
-                            {/* Spec Box */}
                             {currentSpec && (
                                 <View style={styles.specCard}>
                                     <View style={styles.specCardHeader}>
@@ -937,7 +1119,6 @@ export default function InspectionScreen({ route, navigation }) {
                                 </View>
                             )}
 
-                            {/* Measurement Input */}
                             <View style={styles.formGroup}>
                                 <Text style={styles.label}>ENTER MEASURED VALUE ({currentSpec?.unit})</Text>
                                 <TextInput
@@ -951,12 +1132,10 @@ export default function InspectionScreen({ route, navigation }) {
                                 />
                             </View>
 
-                            {/* Tolerance Gauge */}
                             {renderToleranceGauge()}
                         </View>
                     )}
 
-                    {/* Hard-linking Component Replacements Block */}
                     {isComponentFailed(component) && (
                         <View style={styles.replacementCard}>
                             <View style={styles.replacementHeader}>
@@ -991,14 +1170,20 @@ export default function InspectionScreen({ route, navigation }) {
                         </View>
                     )}
 
-                    {/* Summary Panel */}
                     {type === 'dimensional' && renderSummaryPanel()}
 
-                    {/* Submit Button */}
                     <TouchableOpacity
-                        style={[styles.saveBtnAction, loading && styles.saveBtnActionDisabled]}
+                        style={[
+                            styles.saveBtnAction,
+                            { 
+                                backgroundColor: isFormReady ? '#002045' : '#94a3b8',
+                                opacity: isFormReady ? 1.0 : 0.7
+                            },
+                            loading && styles.saveBtnActionDisabled
+                        ]}
                         onPress={handleSave}
-                        disabled={loading}
+                        disabled={loading || !isFormReady}
+                        pointerEvents={isFormReady ? 'auto' : 'none'}
                     >
                         {loading ? (
                             <ActivityIndicator color="#fff" />
@@ -1187,26 +1372,30 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         borderWidth: 1,
         borderRadius: 8,
+        minHeight: 52,
         padding: 14,
         gap: 8,
-        borderColor: '#cbd5e1',
-        backgroundColor: '#f8fafc',
+        borderColor: '#CBD5E1',
+        backgroundColor: '#FFFFFF',
     },
     decisionBtnAccept: {
-        backgroundColor: '#10b981',
-        borderColor: '#10b981',
+        backgroundColor: '#D1FAE5',
+        borderColor: '#059669',
     },
     decisionBtnReject: {
-        backgroundColor: '#ef4444',
-        borderColor: '#ef4444',
+        backgroundColor: '#FEE2E2',
+        borderColor: '#DC2626',
     },
     decisionText: {
         fontSize: 13,
         fontWeight: '800',
-        color: '#64748b',
+        color: '#64748B',
     },
-    decisionTextActive: {
-        color: '#ffffff',
+    decisionTextAccept: {
+        color: '#065F46',
+    },
+    decisionTextReject: {
+        color: '#991B1B',
     },
     defectGrid: {
         flexDirection: 'row',
@@ -1446,9 +1635,10 @@ const styles = StyleSheet.create({
         color: '#78350f',
     },
     saveBtnAction: {
-        backgroundColor: '#002045',
-        padding: 16,
-        borderRadius: 8,
+        width: '100%',
+        height: 56,
+        borderRadius: 12,
+        justifyContent: 'center',
         alignItems: 'center',
         marginTop: 12,
         shadowColor: '#002045',

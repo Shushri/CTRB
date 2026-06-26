@@ -6,6 +6,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient';
 import { database } from '../database';
 import { syncOfflineData } from '../utils/syncQueue';
+import apiClient from '../api/apiClient';
 
 export default function DashboardScreen({ navigation }) {
     const [user, setUser] = useState(null);
@@ -50,6 +51,29 @@ export default function DashboardScreen({ navigation }) {
             setAcceptedCount(ready);
             setHoldCount(records.filter(r => r.status === 'hold').length);
 
+            // Fetch live data from backend if online (Fix 3c)
+            try {
+                const summaryRes = await apiClient.get('/dashboard/summary');
+                if (summaryRes.data?.data) {
+                    const data = summaryRes.data.data;
+                    setStats({
+                        total: parseInt(data.total_received) || 0,
+                        ready: parseInt(data.total_accepted) || 0,
+                        rejected: (parseInt(data.total_rejected) || 0) + (parseInt(data.total_scrap) || 0),
+                        inProgress: (parseInt(data.total_received_status) || 0) + (parseInt(data.open_jobs) || 0)
+                    });
+                    setAcceptedCount(parseInt(data.total_accepted) || 0);
+                    setHoldCount(parseInt(data.total_hold) || 0);
+                }
+
+                const recentRes = await apiClient.get('/ctrb/recent?limit=10');
+                if (recentRes.data?.data) {
+                    setActiveJobs(recentRes.data.data);
+                }
+            } catch (apiErr) {
+                console.log('Dashboard API unreachable, using local WatermelonDB stats:', apiErr.message);
+            }
+
             // Trigger background sync silently
             syncOfflineData().catch(e => console.log('Background sync failed:', e.message));
         } catch (err) {
@@ -86,6 +110,63 @@ export default function DashboardScreen({ navigation }) {
         );
     };
 
+    const handleResetDatabase = async () => {
+        Alert.alert(
+            'Reset Mock Database',
+            'This will erase all local modifications, inspection logs, and photo queue, and reload the 3 default seed records on the tablet. Continue?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { 
+                    text: 'Reset Database', 
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            const keys = [
+                                '@ctrb_app_db:ctrb_records',
+                                '@ctrb_app_db:inspections',
+                                '@ctrb_app_db:photo_queue'
+                            ];
+                            await AsyncStorage.multiRemove(keys);
+                            
+                            const SEED_RECORDS = [
+                              {
+                                id: 'ctrb_seed_1',
+                                ctrb_number: 'TIM-9831A',
+                                job_id: 'JOB-2026-001',
+                                make: 'TIM',
+                                date_received: '2026-06-20',
+                                status: 'under_inspection',
+                              },
+                              {
+                                id: 'ctrb_seed_2',
+                                ctrb_number: 'SKF-4512B',
+                                job_id: 'JOB-2026-002',
+                                make: 'SKF',
+                                date_received: '2026-06-22',
+                                status: 'received',
+                              },
+                              {
+                                id: 'ctrb_seed_3',
+                                ctrb_number: 'TIM-1122C',
+                                job_id: 'JOB-2026-003',
+                                make: 'TIM',
+                                date_received: '2026-06-25',
+                                status: 'assembly',
+                              },
+                            ];
+                            await AsyncStorage.setItem('@ctrb_app_db:ctrb_records', JSON.stringify(SEED_RECORDS));
+                            Alert.alert('Reset Complete', 'Local mock database has been reset.');
+                            loadData();
+                        } catch (e) {
+                            console.error('Failed to reset local database:', e);
+                            Alert.alert('Error', 'Failed to reset database.');
+                        }
+                    }
+                }
+            ]
+        );
+    };
+
     const getStatusStyle = (status) => {
         switch (status) {
             case 'received':
@@ -93,9 +174,16 @@ export default function DashboardScreen({ navigation }) {
             case 'under_inspection':
                 return { bg: '#dbeafe', text: '#2563eb', label: 'INSPECTING', color: '#2563eb' };
             case 'assembly':
-                return { bg: '#fae8ff', text: '#c084fc', label: 'ASSEMBLY', color: '#c084fc' };
+                return { bg: '#fae8ff', text: '#a855f7', label: 'ASSEMBLY', color: '#a855f7' };
+            case 'ready':
+                return { bg: '#d1fae5', text: '#10b981', label: 'READY', color: '#10b981' };
+            case 'rejected':
+            case 'scrap':
+                return { bg: '#fee2e2', text: '#ef4444', label: 'REJECTED', color: '#ef4444' };
+            case 'hold':
+                return { bg: '#ffedd5', text: '#f97316', label: 'ON HOLD', color: '#f97316' };
             default:
-                return { bg: '#f1f5f9', text: '#475569', label: 'UNKNOWN', color: '#64748b' };
+                return { bg: '#f1f5f9', text: '#64748b', label: 'UNKNOWN', color: '#64748b' };
         }
     };
 
@@ -121,16 +209,22 @@ export default function DashboardScreen({ navigation }) {
         <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
             {/* Top Bar Header */}
             <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-                <View>
+                <View style={{ flex: 1 }}>
                     <Text style={styles.railwayTitle}>Wagon Repair Workshop</Text>
-                    <Text style={styles.supervisorName}>
+                    <Text style={styles.supervisorName} numberOfLines={1}>
                         {user ? `${user.name} (${user.role.toUpperCase()})` : 'Supervisor Console'}
                     </Text>
                 </View>
-                <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-                    <MaterialCommunityIcons name="logout" size={20} color="#ef4444" />
-                    <Text style={styles.logoutText}>Logout</Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                    <TouchableOpacity style={styles.resetDbButton} onPress={handleResetDatabase}>
+                        <MaterialCommunityIcons name="database-refresh" size={20} color="#64748b" />
+                        <Text style={styles.resetDbText}>Reset DB</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+                        <MaterialCommunityIcons name="logout" size={20} color="#ef4444" />
+                        <Text style={styles.logoutText}>Logout</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
 
             <KeyboardAvoidingView 
@@ -588,5 +682,21 @@ const styles = StyleSheet.create({
         minWidth: 44,
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    resetDbButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#cbd5e1',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+        minHeight: 44,
+    },
+    resetDbText: {
+        color: '#475569',
+        fontWeight: '600',
+        marginLeft: 6,
+        fontSize: 13,
     }
 });
