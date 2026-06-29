@@ -8,6 +8,6 @@ router.use(authenticateToken);
 
 router.post('/presign', getPresignedUrl);
 router.get('/', getPhotoUrl);
-router.get('/*', getPhotoUrl);
+router.get('/:key', getPhotoUrl);
 
 module.exports = router;
