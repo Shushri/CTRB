@@ -10,7 +10,7 @@ import {
     BarChart, Bar, XAxis, YAxis, CartesianGrid, LabelList
 } from 'recharts';
 
-const API_URL = 'http://localhost:5000/api/v1';
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
 
 const statusMeta = {
     received: { label: 'Received', color: '#3B82F6' },

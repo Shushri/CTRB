@@ -3,7 +3,7 @@ import axios from 'axios';
 import { SearchIcon, FileText, CheckCircle, Settings, Camera, Search as SearchLogo, ArrowLeft, Wrench, ShieldCheck, AlertTriangle, Link, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
-const API_URL = 'http://localhost:5000/api/v1';
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
 
 // Dynamic photo fetching component to resolve signed S3/MinIO URLs
 function DefectPhoto({ photoKey }) {

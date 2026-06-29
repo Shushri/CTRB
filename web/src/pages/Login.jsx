@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { User, Lock, Train, ShieldAlert, Key } from 'lucide-react';
 
-const API_URL = 'http://localhost:5000/api/v1';
+const API_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1';
 
 export default function Login() {
     const [personnelId, setPersonnelId] = useState('');
