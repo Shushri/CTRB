@@ -9,9 +9,13 @@ const getBaseUrl = () => {
         return process.env.EXPO_PUBLIC_API_BASE_URL;
     }
     const hostUri = Constants.expoConfig?.hostUri;
-    const hostIp = hostUri ? hostUri.split(':')[0] : '192.168.1.37';
-    console.log(`Resolved local API endpoint: http://${hostIp}:5000/api/v1`);
-    return `http://${hostIp}:5000/api/v1`;
+    if (hostUri) {
+        const hostIp = hostUri.split(':')[0];
+        console.log(`Resolved local API endpoint: http://${hostIp}:5000/api/v1`);
+        return `http://${hostIp}:5000/api/v1`;
+    }
+    console.log(`Using production API endpoint: https://ctrb-tims-backend.onrender.com/api/v1`);
+    return `https://ctrb-tims-backend.onrender.com/api/v1`;
 };
 
 const apiClient = axios.create({

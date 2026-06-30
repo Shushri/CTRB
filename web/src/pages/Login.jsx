@@ -10,7 +10,7 @@ export default function Login() {
     const [pin, setPin] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
-    
+
     // Field validations
     const [touched, setTouched] = useState({ personnelId: false, pin: false });
     const navigate = useNavigate();
@@ -174,12 +174,16 @@ export default function Login() {
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-xs font-semibold text-[#64748B] bg-slate-50/50 p-3 rounded-xl border border-[#E2E8F0]">
                             <div>
+                                <p className="text-[9px] uppercase tracking-wider text-[#64748B]/70">Administrator</p>
+                                <p className="font-mono text-[#0F172A] mt-0.5">admin101 / 1234</p>
+                            </div>
+                            <div>
                                 <p className="text-[9px] uppercase tracking-wider text-[#64748B]/70">Operator</p>
-                                <p className="font-mono text-[#0F172A] mt-0.5">OP-1001 / 1234</p>
+                                <p className="font-mono text-[#0F172A] mt-0.5">op201 / 1234</p>
                             </div>
                             <div>
                                 <p className="text-[9px] uppercase tracking-wider text-[#64748B]/70">Inspector</p>
-                                <p className="font-mono text-[#0F172A] mt-0.5">IN-2001 / 5678</p>
+                                <p className="font-mono text-[#0F172A] mt-0.5">qc301 / 1234</p>
                             </div>
                         </div>
                     </div>
